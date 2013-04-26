@@ -9,6 +9,7 @@
 import sqlite3, uuid, sys, logging, time, os, json, zlib
 
 logger = logging.getLogger(__name__)
+count = 0
 
 def flip_y(zoom, y):
     return (2**zoom-1) - y
@@ -154,48 +155,66 @@ def disk_to_mbtiles(directory_path, mbtiles_file, **kwargs):
     start_time = time.time()
     msg = ""
     
-    for zoomDir in getDirs(directory_path):
-        if kwargs.get("scheme") == 'ags':
-            if not "L" in zoomDir:
-                logger.warning("You appear to be using an ags scheme on an non-arcgis Server cache.")
-            z = int(zoomDir.replace("L", ""))
-        else:
-            if "L" in zoomDir:
-                logger.warning("You appear to be using a %s scheme on an arcgis Server cache. Try using --scheme=ags instead" % kwargs.get("scheme"))
-            z = int(zoomDir)
-        for rowDir in getDirs(os.path.join(directory_path, zoomDir)):
-            if kwargs.get("scheme") == 'ags':
-                y = flip_y(z, int(rowDir.replace("R", ""), 16))
-            else:
-                x = int(rowDir)
-            for imageFile in os.listdir(os.path.join(directory_path, zoomDir, rowDir)):
-                img, ext = imageFile.split('.', 1)
-                if (ext == image_format):
-                    f = open(os.path.join(directory_path, zoomDir, rowDir, imageFile), 'rb')
-                    if kwargs.get('scheme') == 'xyz':
-                        y = flip_y(int(z), int(img))
-                    elif kwargs.get("scheme") == 'ags':
-                        x = int(img.replace("C", ""), 16)
-                    else:
-                        y = int(img)
+    scheme = kwargs.get('scheme')
+    ext = kwargs.get('format')
+    
+    if scheme == 'xyz':
+        convertTile = xyz_to_mbtiles
+    elif scheme == 'tms':
+        convertTile = tms_to_mbtiles
+    elif scheme == 'ags':
+        convertTile = ags_to_mbtiles
+    else:
+        raise Exception("Unknown tile scheme: " + scheme)
 
-                    logger.debug(' Read tile from Zoom (z): %i\tCol (x): %i\tRow (y): %i' % (z, x, y))
-                    cur.execute("""insert into tiles (zoom_level,
-                        tile_column, tile_row, tile_data) values
-                        (?, ?, ?, ?);""",
-                        (z, x, y, sqlite3.Binary(f.read())))
-                    f.close()
-                    count = count + 1
-                    if (count % 100) == 0:
-                        for c in msg: sys.stdout.write(chr(8))
-                        msg = "%s tiles inserted (%d tiles/sec)" % (count, count / (time.time() - start_time))
-                        sys.stdout.write(msg)
-                elif (ext == 'grid.json'):
-                    if grid_warning:
-                        logger.warning('grid.json interactivity import not yet supported\n')
-                        grid_warning= False
+    for r1, zs, ignore in os.walk(directory_path):
+        for z in zs:
+            for r2, xs, ignore in os.walk(os.path.join(r1, z)):
+                for x in xs:
+                    for r2, ignore, ys in os.walk(os.path.join(r1, z, x)):
+                        for y in ys:
+                            if (ext == image_format):
+                                img = y.replace("."+ext,"")
+                                convertTile(r1, z, x, img, ext, cur)
+                            elif (ext == 'grid.json'):
+                                if grid_warning:
+                                    logger.warning('grid.json interactivity import not yet supported\n')
+                                    grid_warning= False
+                            count = count + 1
+                            if (count % 100) == 0:
+                                for c in msg: sys.stdout.write(chr(8))
+                                msg = "%s tiles inserted (%d tiles/sec)" % (count, count / (time.time() - start_time))
+                                sys.stdout.write(msg)
+                            
     logger.debug('tiles inserted.')
     optimize_database(con)
+    
+def ags_to_mbtiles(base, d1, d2, img, ext, cur):
+    path = os.path.join(base, d1, d2, img+'.'+ext)
+    z = int(d1[1:], 10)
+    y = flip_y(z, int(d2[1:], 16))
+    x = int(img[1:], 16)
+    insert_tile(cur, z, x, y, path)
+                    
+def tms_to_mbtiles(base, d1, d2, img, ext, cur):
+    path = os.path.join(base, d1, d2, img+'.'+ext)
+    z, x, y = int(d1), int(d2), flip_y(int(d1), int(img))
+    insert_tile(cur, z, x, y, path)
+                                    
+def xyz_to_mbtiles(base, d1, d2, img, ext, cur):
+    path = os.path.join(base, d1, d2, img+'.'+ext)
+    z, x, y = int(d1), int(d2), int(img)
+    insert_tile(cur, z, x, y, path)
+                            
+def insert_tile(cur, z, x, y, fPath):
+    f = open(fPath, 'rb')
+    #~ logger.debug(' import tile from Zoom (z): %i\tCol (x): %i\tRow (y): %i' % (z, x, y))
+    cur.execute("""insert into tiles (zoom_level,
+        tile_column, tile_row, tile_data) values
+        (?, ?, ?, ?);""",
+        (z, x, y, sqlite3.Binary(f.read())))
+    f.close()
+    
 
 def mbtiles_to_disk(mbtiles_file, directory_path, **kwargs):
     logger.debug("Exporting MBTiles to disk")
