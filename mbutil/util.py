@@ -138,8 +138,7 @@ def disk_to_mbtiles(directory_path, mbtiles_file, **kwargs):
     cur = con.cursor()
     optimize_connection(cur)
     mbtiles_setup(cur)
-    #~ image_format = 'png'
-    image_format = kwargs.get('format')
+
     grid_warning = True
     try:
         metadata = json.load(open(os.path.join(directory_path, 'metadata.json'), 'r'))
@@ -156,7 +155,7 @@ def disk_to_mbtiles(directory_path, mbtiles_file, **kwargs):
     msg = ""
     
     scheme = kwargs.get('scheme')
-    ext = kwargs.get('format')
+    image_format = kwargs.get('format')
     
     if scheme == 'xyz':
         convertTile = xyz_to_mbtiles
@@ -173,6 +172,7 @@ def disk_to_mbtiles(directory_path, mbtiles_file, **kwargs):
                 for x in xs:
                     for r2, ignore, ys in os.walk(os.path.join(r1, z, x)):
                         for y in ys:
+                            ext = y.split('.')[-1]
                             if (ext == image_format):
                                 img = y.replace("."+ext,"")
                                 convertTile(r1, z, x, img, ext, cur)
